@@ -21,17 +21,18 @@ ED_CONTINUE = 2
 # keyboard driven editor for speed.
 class Editor(object):
 
-	def __init__(self, video, clip, screen):
+	def __init__(self, imgseq, fps, clip, screen):
 		self.screen = screen
-		self.video = video
+		self.imgseq = imgseq
 		self.domain = deepcopy(clip)
 		self.clip = deepcopy(clip)
+		self.fps = fps
 		self.cursor = clip[0]
 		self.left = self.right = None
 		self.left_clip = self.right_clip = None
 
 		w, h = screen.get_size()
-		vw, vh = video.size
+		vw, vh, _ = imgseq[0].shape
 		self.scale = min(float(w) / vw, float(h - BAR_H) / vh)
 		self.bar_top = h - BAR_H
 		x_scale = w / float(clip[1] - clip[0])
@@ -41,23 +42,24 @@ class Editor(object):
 		self.state = PAUSE
 
 	def step(self, dt):
+		frames = dt * self.fps
 		if self.state == PAUSE:
 			pass
 		if self.state == PLAY:
-			self.cursor += dt
+			self.cursor += frames
 		if self.state == SCRUB_RIGHT:
 			self.scrub_speed = min(self.scrub_speed * 1.05, SCRUB_MAX_SPEED)
-			self.cursor += dt * self.scrub_speed
+			self.cursor += frames * self.scrub_speed
 			if self.cursor >= self.domain[1]:
-				self.cursor = self.domain[1]
+				self.cursor = self.domain[1] - 1
 		if self.state == SCRUB_LEFT:
 			self.scrub_speed = min(self.scrub_speed * 1.05, SCRUB_MAX_SPEED)
-			self.cursor -= dt * self.scrub_speed
+			self.cursor -= frames * self.scrub_speed
 			if self.cursor <= self.domain[0]:
 				self.cursor = self.domain[0]
 
 	def draw(self):
-		frame = self.video.get_frame(self.cursor)
+		frame = self.imgseq[int(self.cursor)]
 		surface = pg.surfarray.make_surface(frame)
 		r = pg.transform.rotate(surface, -90)
 		f = pg.transform.flip(r, True, False)
@@ -91,9 +93,13 @@ class Editor(object):
 
 	def keyevent(self, key):
 		if key == pg.K_RIGHTBRACKET:
-			self.clip[1] = self.cursor
+			self.clip[1] = int(self.cursor + 1)
 		if key == pg.K_LEFTBRACKET:
-			self.clip[0] = self.cursor
+			self.clip[0] = int(self.cursor)
+		if key == pg.K_COMMA and self.cursor > self.clip[0]:
+			self.cursor = int(self.cursor) - 1
+		if key == pg.K_PERIOD and self.cursor < self.clip[1] - 1:
+			self.cursor = int(self.cursor) + 1
 		if key == pg.K_b:
 			self.cursor = self.clip[0]
 		if key == pg.K_e:
@@ -122,7 +128,7 @@ class EditorTree(object):
 			self.left.get_clips(arr)
 		if self.right is not None:
 			self.right.get_clips(arr)
-		if self.left is None and self.right is None:
+		if (self.left, self.right) == (None, None):
 			arr.append(self.ed.clip)
 
 	def keyevent(self, key):
@@ -147,8 +153,8 @@ class EditorTree(object):
 			if key == pg.K_s:
 				clip0 = [self.ed.clip[0], self.ed.cursor]
 				clip1 = [self.ed.cursor, self.ed.clip[1]]
-				self.left = EditorTree(Editor(self.ed.video, clip0, self.ed.screen))
-				self.right = EditorTree(Editor(self.ed.video, clip1, self.ed.screen))
+				self.left = EditorTree(Editor(self.ed.imgseq, self.ed.fps, clip0, self.ed.screen))
+				self.right = EditorTree(Editor(self.ed.imgseq, self.ed.fps, clip1, self.ed.screen))
 				self.active = self.left
 				return ED_CONTINUE
 
@@ -160,6 +166,8 @@ class EditorTree(object):
 
 		return ED_CONTINUE
 
+def to_imageseq(video):
+	return list(video.iter_frames())
 
 def interactive_editor(video, clip):
 	clip[1] = 4.0
@@ -169,7 +177,9 @@ def interactive_editor(video, clip):
 	w = int(ratio * h)
 	screen = pg.display.set_mode((w, h), 
 		pg.DOUBLEBUF | pg.HWSURFACE | pg.FULLSCREEN)
-	ed = Editor(video, clip, screen)
+
+	imgseq = to_imageseq(video.subclip(*clip))
+	ed = Editor(imgseq, video.fps, [0, len(imgseq)], screen)
 	root = EditorTree(ed)
 
 	fps = video.fps/2
