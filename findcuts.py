@@ -18,6 +18,8 @@ import moviepy.editor as mpe
 import multiprocessing
 import pygame
 
+from guieditor import interactive_editor
+
 #
 # terminology used:
 # -----------------
@@ -207,7 +209,7 @@ def save_clips(video, clips):
 	if not os.path.exists(dirpath):
 		os.mkdir(dirpath)
 	for c in clips:
-		path = "{}/{}{:.4f}_{:.4f}.mp4".format(dirpath, name, *c)
+		path = "{}/{}_{:.4f}_{:.4f}.mp4".format(dirpath, name, *c)
 		video.subclip(*c).write_videofile(path)
 
 #
@@ -277,13 +279,17 @@ def main():
 			json.dump(results, f)
 
 	clips = results["clips"]
-	if user_cancel("review clips?"):
-		return
+	#if user_cancel("review clips?"):
+		#return
 	#keep = approve_clips(video, clips)
 
-	if user_cancel("save clips?"):
-		return
-	save_clips(video_lowres, clips)
+	#if user_cancel("save clips?"):
+		#return
+	#save_clips(video_lowres, clips)
+
+	clip = clips[0]
+	edit_clips = interactive_editor(video, clip)
+	print("edited clips:", edit_clips)
 
 if __name__ == '__main__':
 	main()
