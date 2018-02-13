@@ -8,23 +8,21 @@ import sys
 import time
 
 import cv2
+import itertools
 import json
 import numpy as np
 import matplotlib.pyplot as plt
 import moviepy.video.tools.tracking as tracking
 import moviepy.editor as mpe
+import multiprocessing
 import pygame
 
-def underscore(s):
-	print(s)
-	print("-" * len(s))
-
-def rightpad(s, n):
-	return s + " " * (n - len(s))
-
-def zip_max(a, b):
-	for x, y in zip(a, b):
-		yield max(x, y)
+#
+# terminology used:
+# -----------------
+# cut  - a single moment in time when the shot changes
+# clip - (begin, end) time boundaries of a shot
+#
 
 def tabular(rows):
 	if len(rows) == 0:
@@ -35,21 +33,23 @@ def tabular(rows):
 	rows = [[str(x) for x in row] for row in rows]
 	colmax = [0 for _ in range(nc)]
 	for row in rows:
-		colmax = list(zip_max(colmax, [len(x) for x in row]))
+		colmax = list(itertools.imap(max, colmax, [len(x) for x in row]))
 	for row in rows:
-		pads = (rightpad(s, cmax) for s, cmax in zip(row, colmax))
-		rowstr = " ".join(pads)
-		yield rowstr
+		cells = (s.ljust(cmax) for s, cmax in zip(row, colmax))
+		yield " ".join(cells)
 
 def print_info(clip):
-	print("")
-	underscore("clip info:")
-	for s in tabular([
+	rowstrs = list(tabular([
 		["name:", clip.filename],
 		["size:", clip.size],
 		["duration:", str(clip.duration) + " secs"],
 		["fps:", clip.fps],
-	]):
+	]))
+	underscore_len = max(len(row) for row in rowstrs)
+	print("")
+	print("clip info:")
+	print("-" * underscore_len)
+	for s in rowstrs:
 		print(s)
 	print("")
 
@@ -68,7 +68,7 @@ def find_likely_cuts(clip, n_top=None, tile_size=8, n_tiles=20, radius=15):
 	if n_top is None:
 		# most FPV video does not contain fast cuts.
 		# might need to increase n_top for other kinds of video.
-		n_top = clip.duration / 5
+		n_top = int(clip.duration)
 	frames = clip.iter_frames(progress_bar=True)
 	prev_frame = None
 	for i, frame in enumerate(frames):
@@ -117,9 +117,10 @@ def get_user_decision(size):
 	if not decide_frame:
 		msg = """
 		was the previous video clip a cut?
-		   y = yes, n = no, r = replay
+		   y = yes, n = no, r = replay,
+		   m = mark for manual attention
 		"""
-		# TODO figure out why the text rendering is really ugly
+		# TODO figure out why the text rendering is really slow + ugly
 		decide_frame = mpe.TextClip(msg, 
 			size=size, color='white', bg_color='black', font='Monaco',)
 
@@ -141,7 +142,7 @@ def show_padded_clips(clip, times, n_repeat=1, pad_sec=1.0):
 		c = clip.subclip(t0, t1)
 
 		for _ in range(n_repeat):
-			c.preview()
+			c.preview(fps=clip.fps)
 
 		u = get_user_decision(clip.size)
 		if u == 'y':
@@ -151,6 +152,10 @@ def show_padded_clips(clip, times, n_repeat=1, pad_sec=1.0):
 		elif u == 'n':
 			print("rejecting cut")
 			accept[i] = False
+			i += 1
+		elif u == 'm':
+			print("marking cut for manual attention")
+			# TODO: do it
 			i += 1
 		elif u == 'r':
 			print("replaying")
@@ -179,6 +184,22 @@ def save_results(filename, clip, cut_times, accept):
 	with open(filename, 'w') as f:
 		json.dump(obj, f)
 
+def approve_clips(clip, cuts):
+	black = mpe.ColorClip(clip.size, (0, 0, 0))
+	accept = [True for _ in cuts]
+	for i, c in enumerate(cuts):
+		t0, t1 = c["begin"], c["end"]
+		subclip = clip.subclip(t0, t1)
+		reject_keys = [pygame.K_DELETE, pygame.K_BACKSPACE]
+		def event_handler(ev):
+			if ev.type == pygame.KEYDOWN and ev.key in reject_keys:
+				print("rejecting clip")
+				accept[i] = False
+		subclip.preview(fps=clip.fps, event_handler=event_handler)
+		black.show()
+		time.sleep(1)
+	return accept
+
 def main():
 	argparser = argparse.ArgumentParser()
 	argparser.add_argument('clip')
@@ -199,8 +220,18 @@ def main():
 	else:
 		times = pickle.load(open('./cut_hyps', 'rb'))
 
-	accept = show_padded_clips(clip, times)
-	save_results('test.json', clip, times, accept)
+	times = sorted(times)
+
+	if False:
+		accept = show_padded_clips(clip, times)
+		cuts = cuts2clips(0, clip.duration, times, accept)
+		save_results('test.json', clip, times, accept)
+	else:
+		j = json.load(open('test.json'))
+		cuts = j["cuts"]
+
+	approve_clips(clip, cuts)
+
 
 if __name__ == '__main__':
 	main()
