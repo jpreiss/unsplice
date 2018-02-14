@@ -188,16 +188,22 @@ def cuts2clips(begin, end, cuts, accept):
 			tprev = t
 	yield Clip(tprev, end)
 
+KEEP = "keep"
+EDIT = "edit"
+REJECT = "reject"
 def approve_clips(video, clips):
 	black = mpe.ColorClip(video.size, (0, 0, 0))
-	accept = [True for _ in clips]
+	accept = [KEEP for _ in clips]
 	for i, c in enumerate(clips):
 		clip = video.subclip(*c)
-		reject_keys = [pygame.K_DELETE, pygame.K_BACKSPACE]
 		def event_handler(ev):
-			if ev.type == pygame.KEYDOWN and ev.key in reject_keys:
-				print("rejecting video")
-				accept[i] = False
+			if ev.type == pygame.KEYDOWN:
+				if ev.key in [pygame.K_DELETE, pygame.K_BACKSPACE]:
+					print("rejecting video")
+					accept[i] = REJECT
+				if ev.key == pygame.K_m:
+					print("marking video for editing")
+					accept[i] = EDIT
 		clip.preview(fps=video.fps, event_handler=event_handler)
 		black.show()
 		time.sleep(1)
@@ -218,16 +224,8 @@ def save_clips(video, clips):
 #   proposed_cuts: [floats]
 #   accept: [bools] or null
 #   clips: [[t0, t1], ...] or null
-#
-def save_results(video, cuts, accept=None, clips=None):
-	obj = {
-		"filename" : video.filename,
-		"proposed_cuts" : cuts,
-		"accept" : accept,
-		"clips" : clips,
-	}
-	with open(video.filename + '.json', 'w') as f:
-		json.dump(obj, f)
+#   clip_accept: [<'keep' or 'edit' or 'reject'>, ...]
+#   clips_final: like clips
 
 def load_or_construct_results(video_filename):
 	path = video_filename + ".json"
@@ -239,6 +237,8 @@ def load_or_construct_results(video_filename):
 		"proposed_cuts" : None,
 		"accept" : None,
 		"clips" : None,
+		"clip_accept" : None,
+		"clips_final" : None,
 	}
 	return results, path
 
@@ -277,19 +277,35 @@ def main():
 		results["clips"] = clips
 		with open(path, 'w') as f:
 			json.dump(results, f)
+	if not results["clip_accept"]:
+		if user_cancel("review clips?"):
+			return
+		clips = results["clips"]
+		keep = approve_clips(video, clips)
+		results["clip_accept"] = keep
+		with open(path, 'w') as f:
+			json.dump(results, f)
+	if not results["clips_final"]:
+		if user_cancel("edit marked clips?"):
+			return
+		clips_final = []
+		clips = results["clips"]
+		keep = results["clip_accept"]
+		for clip, keep in zip(clips, keep):
+			if keep == EDIT:
+				edit_clips = interactive_editor(video, clip)
+				print("edited clips:", edit_clips)
+				clips_final.extend(edit_clips)
+			elif keep == KEEP:
+				clips_final.append(clip)
+		results["clips_final"] = clips_final
+		with open(path, 'w') as f:
+			json.dump(results, f)
 
-	clips = results["clips"]
-	#if user_cancel("review clips?"):
-		#return
-	#keep = approve_clips(video, clips)
 
 	#if user_cancel("save clips?"):
 		#return
 	#save_clips(video_lowres, clips)
-
-	clip = clips[0]
-	edit_clips = interactive_editor(video, clip)
-	print("edited clips:", edit_clips)
 
 if __name__ == '__main__':
 	main()

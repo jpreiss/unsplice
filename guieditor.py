@@ -9,9 +9,8 @@ CURSOR_COLOR = pg.Color(255, 255, 255, 255)
 
 PAUSE = 0
 PLAY = 1
-SCRUB = 2
-SCRUB_LEFT = 3
-SCRUB_RIGHT = 4
+SCRUB_LEFT = 2
+SCRUB_RIGHT = 3
 SCRUB_MAX_SPEED = 4.0
 
 ED_ACCEPT = 0
@@ -28,12 +27,9 @@ class Editor(object):
 		self.clip = deepcopy(clip)
 		self.fps = fps
 		self.cursor = clip[0]
-		self.left = self.right = None
-		self.left_clip = self.right_clip = None
 
 		w, h = screen.get_size()
 		vw, vh, _ = imgseq[0].shape
-		self.scale = min(float(w) / vw, float(h - BAR_H) / vh)
 		self.bar_top = h - BAR_H
 		x_scale = w / float(clip[1] - clip[0])
 		self.t2x = lambda t : x_scale * (t - clip[0])
@@ -41,22 +37,23 @@ class Editor(object):
 
 		self.state = PAUSE
 
+	def cursor_clip(self):
+		if self.cursor < self.domain[0]:
+			self.cursor = self.domain[0]
+		elif self.cursor >= self.domain[1]:
+			self.cursor = self.domain[1] - 1
+
 	def step(self, dt):
 		frames = dt * self.fps
 		if self.state == PAUSE:
 			pass
 		if self.state == PLAY:
 			self.cursor += frames
-		if self.state == SCRUB_RIGHT:
+		if self.state in [SCRUB_LEFT, SCRUB_RIGHT]:
 			self.scrub_speed = min(self.scrub_speed * 1.05, SCRUB_MAX_SPEED)
-			self.cursor += frames * self.scrub_speed
-			if self.cursor >= self.domain[1]:
-				self.cursor = self.domain[1] - 1
-		if self.state == SCRUB_LEFT:
-			self.scrub_speed = min(self.scrub_speed * 1.05, SCRUB_MAX_SPEED)
-			self.cursor -= frames * self.scrub_speed
-			if self.cursor <= self.domain[0]:
-				self.cursor = self.domain[0]
+			factor = self.scrub_speed * (-1 if self.state == SCRUB_LEFT else 1)
+			self.cursor += factor * frames
+		self.cursor_clip()
 
 	def draw(self):
 		frame = self.imgseq[int(self.cursor)]
@@ -96,14 +93,18 @@ class Editor(object):
 			self.clip[1] = int(self.cursor + 1)
 		if key == pg.K_LEFTBRACKET:
 			self.clip[0] = int(self.cursor)
-		if key == pg.K_COMMA and self.cursor > self.clip[0]:
+		if key == pg.K_COMMA:
 			self.cursor = int(self.cursor) - 1
-		if key == pg.K_PERIOD and self.cursor < self.clip[1] - 1:
+			self.cursor_clip()
+		if key == pg.K_PERIOD:
 			self.cursor = int(self.cursor) + 1
+			self.cursor_clip()
 		if key == pg.K_b:
 			self.cursor = self.clip[0]
 		if key == pg.K_e:
 			self.cursor = self.clip[1]
+		if key == pg.K_SPACE:
+			self.state = PLAY
 
 		return ED_CONTINUE
 
@@ -125,8 +126,10 @@ class EditorTree(object):
 
 	def get_clips(self, arr):
 		if self.left is not None:
+			print("recursing left")
 			self.left.get_clips(arr)
 		if self.right is not None:
+			print("recursing right")
 			self.right.get_clips(arr)
 		if (self.left, self.right) == (None, None):
 			arr.append(self.ed.clip)
@@ -134,18 +137,20 @@ class EditorTree(object):
 	def keyevent(self, key):
 		ret = self.active.keyevent(key)
 
-		if self.active == self.left:
+		if self.active is self.left:
 			if ret == ED_REJECT:
 				self.left = None
 			if ret in [ED_ACCEPT, ED_REJECT]:
 				self.active = self.right
 
-		elif self.active == self.right:
+		elif self.active is self.right:
 			if ret == ED_REJECT:
 				self.right = None
-			if ret in [ED_ACCEPT, ED_REJECT]:
 				self.active = None
 				return ED_ACCEPT if self.left is not None else ED_REJECT
+			if ret == ED_ACCEPT:
+				self.active = None
+				return ED_ACCEPT
 
 		else:
 			assert self.active == self.ed
@@ -166,19 +171,14 @@ class EditorTree(object):
 
 		return ED_CONTINUE
 
-def to_imageseq(video):
-	return list(video.iter_frames())
-
 def interactive_editor(video, clip):
-	clip[1] = 4.0
-
 	ratio = float(video.size[0]) / video.size[1]
 	h = 600
 	w = int(ratio * h)
 	screen = pg.display.set_mode((w, h), 
 		pg.DOUBLEBUF | pg.HWSURFACE | pg.FULLSCREEN)
 
-	imgseq = to_imageseq(video.subclip(*clip))
+	imgseq = list(video.subclip(*clip).iter_frames())
 	ed = Editor(imgseq, video.fps, [0, len(imgseq)], screen)
 	root = EditorTree(ed)
 
@@ -188,7 +188,6 @@ def interactive_editor(video, clip):
 	clips = []
 
 	while running:
-
 		dt = clock.tick(fps) / 1000.0
 		root.keyscan()
 		root.step(dt)
@@ -206,4 +205,8 @@ def interactive_editor(video, clip):
 				elif ret == ED_REJECT:
 					running = False
 	
-	return clips
+	frame2time = lambda f: clip[0] + (1.0 / video.fps) * f
+	clip2time = lambda c: (frame2time(c[0]), frame2time(c[1]))
+	print("real end:", clip[1])
+	print("approx end:", frame2time(len(imgseq)))
+	return [clip2time(c) for c in clips]
